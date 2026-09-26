@@ -1,0 +1,408 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://tune_o_viewer.gd" id="1"]
+[ext_resource type="Script" path="res://file_view.gd" id="2"]
+[ext_resource type="Texture2D" path="res://icon_small.png" id="3"]
+
+[sub_resource type="Gradient" id="g"]
+colors = PackedColorArray(0, 0, 0.502, 1, 0.063, 0.518, 0.816, 1)
+
+[sub_resource type="GradientTexture2D" id="gt"]
+gradient = SubResource("g")
+width = 256
+height = 1
+
+[node name="TuneOViewer" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("1")
+
+[node name="Window" type="PanelContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="VBox" type="VBoxContainer" parent="Window"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="TitleBar" type="TextureRect" parent="Window/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 20)
+layout_mode = 2
+texture = SubResource("gt")
+expand_mode = 1
+
+[node name="HBox" type="HBoxContainer" parent="Window/VBox/TitleBar"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 4.0
+offset_right = -2.0
+mouse_filter = 2
+
+[node name="TitleIcon" type="TextureRect" parent="Window/VBox/TitleBar/HBox"]
+custom_minimum_size = Vector2(16, 16)
+layout_mode = 2
+size_flags_vertical = 4
+mouse_filter = 2
+texture = ExtResource("3")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Title" type="Label" parent="Window/VBox/TitleBar/HBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+text = "Tune-O-Viewer"
+
+[node name="MaxButton" type="Button" parent="Window/VBox/TitleBar/HBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(16, 14)
+layout_mode = 2
+size_flags_vertical = 4
+tooltip_text = "Fullscreen (F11)"
+icon_alignment = 1
+
+[node name="CloseButton" type="Button" parent="Window/VBox/TitleBar/HBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(16, 14)
+layout_mode = 2
+size_flags_vertical = 4
+text = "x"
+
+[node name="MenuBar" type="HBoxContainer" parent="Window/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="FileMenu" type="MenuButton" parent="Window/VBox/MenuBar"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "File"
+
+[node name="EditMenu" type="MenuButton" parent="Window/VBox/MenuBar"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Edit"
+
+[node name="ViewMenu" type="MenuButton" parent="Window/VBox/MenuBar"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "View"
+
+[node name="HelpMenu" type="MenuButton" parent="Window/VBox/MenuBar"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Help"
+
+[node name="Toolbar" type="HBoxContainer" parent="Window/VBox"]
+layout_mode = 2
+
+[node name="Pad" type="Control" parent="Window/VBox/Toolbar"]
+custom_minimum_size = Vector2(2, 0)
+layout_mode = 2
+
+[node name="SearchLabel" type="Label" parent="Window/VBox/Toolbar"]
+layout_mode = 2
+text = "Search:"
+
+[node name="SearchEdit" type="LineEdit" parent="Window/VBox/Toolbar"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "name, artist, album...  (* and ? wildcards work)"
+clear_button_enabled = true
+
+[node name="SelectButton" type="Button" parent="Window/VBox/Toolbar"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(55, 0)
+layout_mode = 2
+tooltip_text = "Show a tick box by every file (Ctrl+K)"
+toggle_mode = true
+text = "Select"
+
+[node name="NumberButton" type="Button" parent="Window/VBox/Toolbar"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(28, 0)
+layout_mode = 2
+tooltip_text = "Line numbers (Ctrl+N)"
+toggle_mode = true
+text = "#"
+
+[node name="PreviewButton" type="Button" parent="Window/VBox/Toolbar"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+tooltip_text = "Preview pane (Alt+P)"
+toggle_mode = true
+text = "Preview"
+
+[node name="ScanButton" type="Button" parent="Window/VBox/Toolbar"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(70, 0)
+layout_mode = 2
+tooltip_text = "Scan the folders (F5); Stop while scanning (Esc)"
+text = "Scan"
+
+[node name="Pad2" type="Control" parent="Window/VBox/Toolbar"]
+custom_minimum_size = Vector2(2, 0)
+layout_mode = 2
+
+[node name="Body" type="MarginContainer" parent="Window/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/margin_left = 4
+theme_override_constants/margin_right = 4
+
+[node name="Split" type="HSplitContainer" parent="Window/VBox/Body"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="Sidebar" type="ScrollContainer" parent="Window/VBox/Body/Split"]
+custom_minimum_size = Vector2(200, 0)
+layout_mode = 2
+horizontal_scroll_mode = 0
+
+[node name="Side" type="VBoxContainer" parent="Window/VBox/Body/Split/Sidebar"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 5
+
+[node name="FoldersLabel" type="Label" parent="Window/VBox/Body/Split/Sidebar/Side"]
+layout_mode = 2
+theme_type_variation = &"SectionLabel"
+text = "Folders"
+
+[node name="FolderRow" type="HBoxContainer" parent="Window/VBox/Body/Split/Sidebar/Side"]
+layout_mode = 2
+
+[node name="PathEdit" type="LineEdit" parent="Window/VBox/Body/Split/Sidebar/Side/FolderRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "type or paste a path"
+
+[node name="AddFolderButton" type="Button" parent="Window/VBox/Body/Split/Sidebar/Side/FolderRow"]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Add the folder typed on the left (or pick one if the box is empty)"
+text = "Add"
+
+[node name="BrowseButton" type="Button" parent="Window/VBox/Body/Split/Sidebar/Side/FolderRow"]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Pick a folder to add (Ctrl+O). You can also drop folders on the window."
+text = "Browse..."
+
+[node name="Folders" type="HFlowContainer" parent="Window/VBox/Body/Split/Sidebar/Side"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="Sep1" type="HSeparator" parent="Window/VBox/Body/Split/Sidebar/Side"]
+layout_mode = 2
+
+[node name="TypesLabel" type="Label" parent="Window/VBox/Body/Split/Sidebar/Side"]
+layout_mode = 2
+theme_type_variation = &"SectionLabel"
+text = "File types"
+
+[node name="TypeRow" type="HBoxContainer" parent="Window/VBox/Body/Split/Sidebar/Side"]
+layout_mode = 2
+
+[node name="Presets" type="MenuButton" parent="Window/VBox/Body/Split/Sidebar/Side/TypeRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Presets..."
+flat = false
+
+[node name="CustomEdit" type="LineEdit" parent="Window/VBox/Body/Split/Sidebar/Side/TypeRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "e.g. iso, log"
+
+[node name="AddButton" type="Button" parent="Window/VBox/Body/Split/Sidebar/Side/TypeRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Add"
+
+[node name="Tags" type="HFlowContainer" parent="Window/VBox/Body/Split/Sidebar/Side"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="ClearButton" type="Button" parent="Window/VBox/Body/Split/Sidebar/Side"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 0
+tooltip_text = "No type filter: list every file"
+text = "Clear types"
+
+[node name="Sep2" type="HSeparator" parent="Window/VBox/Body/Split/Sidebar/Side"]
+layout_mode = 2
+
+[node name="SkipLabel" type="Label" parent="Window/VBox/Body/Split/Sidebar/Side"]
+layout_mode = 2
+theme_type_variation = &"SectionLabel"
+text = "Skip folders named"
+
+[node name="SkipRow" type="HBoxContainer" parent="Window/VBox/Body/Split/Sidebar/Side"]
+layout_mode = 2
+
+[node name="SkipEdit" type="LineEdit" parent="Window/VBox/Body/Split/Sidebar/Side/SkipRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "e.g. Temp, *backup*"
+
+[node name="SkipAddButton" type="Button" parent="Window/VBox/Body/Split/Sidebar/Side/SkipRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Add"
+
+[node name="Skips" type="HFlowContainer" parent="Window/VBox/Body/Split/Sidebar/Side"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="Split2" type="HSplitContainer" parent="Window/VBox/Body/Split"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="FileView" type="Control" parent="Window/VBox/Body/Split/Split2"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(240, 120)
+layout_mode = 2
+size_flags_horizontal = 3
+script = ExtResource("2")
+
+[node name="Preview" type="PanelContainer" parent="Window/VBox/Body/Split/Split2"]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(240, 0)
+layout_mode = 2
+theme_type_variation = &"Sunken"
+
+[node name="Box" type="VBoxContainer" parent="Window/VBox/Body/Split/Split2/Preview"]
+layout_mode = 2
+
+[node name="PreviewTitle" type="Label" parent="Window/VBox/Body/Split/Split2/Preview/Box"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(1, 0)
+layout_mode = 2
+theme_type_variation = &"SectionLabel"
+text = "Nothing selected"
+autowrap_mode = 3
+
+[node name="PreviewImage" type="TextureRect" parent="Window/VBox/Body/Split/Split2/Preview/Box"]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(0, 180)
+layout_mode = 2
+expand_mode = 1
+stretch_mode = 5
+
+[node name="AudioRow" type="HBoxContainer" parent="Window/VBox/Body/Split/Split2/Preview/Box"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+
+[node name="PlayButton" type="Button" parent="Window/VBox/Body/Split/Split2/Preview/Box/AudioRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 0)
+layout_mode = 2
+tooltip_text = "Play / pause (Space)"
+text = "Play"
+
+[node name="Seek" type="HSlider" parent="Window/VBox/Body/Split/Split2/Preview/Box/AudioRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+step = 0.1
+
+[node name="TimeLabel" type="Label" parent="Window/VBox/Body/Split/Split2/Preview/Box/AudioRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "0:00"
+
+[node name="PreviewText" type="TextEdit" parent="Window/VBox/Body/Split/Split2/Preview/Box"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+size_flags_vertical = 3
+editable = false
+wrap_mode = 1
+
+[node name="PreviewInfo" type="Label" parent="Window/VBox/Body/Split/Split2/Preview/Box"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(1, 0)
+layout_mode = 2
+size_flags_vertical = 2
+autowrap_mode = 3
+
+[node name="StatusBar" type="PanelContainer" parent="Window/VBox"]
+layout_mode = 2
+theme_type_variation = &"StatusBar"
+
+[node name="Status" type="Label" parent="Window/VBox/StatusBar"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Add a folder, then press Scan."
+text_overrun_behavior = 3
+
+[node name="Grip" type="TextureRect" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 3
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -14.0
+offset_top = -14.0
+offset_right = -2.0
+offset_bottom = -2.0
+mouse_default_cursor_shape = 12
+tooltip_text = "Drag to resize"
+
+[node name="FolderDialog" type="FileDialog" parent="."]
+unique_name_in_owner = true
+title = "Select Folder"
+ok_button_text = "OK"
+file_mode = 2
+access = 2
+
+[node name="SaveDialog" type="FileDialog" parent="."]
+unique_name_in_owner = true
+title = "Export"
+access = 2
+
+[node name="ContextMenu" type="PopupMenu" parent="."]
+unique_name_in_owner = true
+
+[node name="HelpDialog" type="AcceptDialog" parent="."]
+unique_name_in_owner = true
+title = "Keyboard Shortcuts"
+
+[node name="AboutDialog" type="AcceptDialog" parent="."]
+unique_name_in_owner = true
+title = "About Tune-O-Viewer"
+
+[node name="ConfirmDialog" type="ConfirmationDialog" parent="."]
+unique_name_in_owner = true
+title = "Tune-O-Viewer"
+
+[node name="Player" type="AudioStreamPlayer" parent="."]
+unique_name_in_owner = true
+
+[node name="SearchTimer" type="Timer" parent="."]
+unique_name_in_owner = true
+wait_time = 0.15
+one_shot = true

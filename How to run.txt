@@ -1,0 +1,25 @@
+Tune-O-Viewer v1.0
+==================
+
+Every file in every folder, in one flat list.
+https://zfactorpsx.itch.io/tune-o-viewer  (the Discord link is there too)
+
+WINDOWS
+  Unzip, then double-click Tune-O-Viewer.exe. Nothing to install.
+  If Windows SmartScreen warns you: click "More info", then "Run anyway".
+
+LINUX (64-bit)
+  Unzip, then double-click Tune-O-Viewer.x86_64, or run it from a terminal:
+      ./Tune-O-Viewer.x86_64
+  If it won't start, allow it to run first:  chmod +x Tune-O-Viewer.x86_64
+
+MACOS (Intel and Apple Silicon)
+  Unzip, then move Tune-O-Viewer.app to Applications if you like.
+  The first time: right-click the app, choose Open, then Open again
+  (the app isn't signed by Apple, so a plain double-click is blocked once).
+
+Audio conversion (File > Convert Selected To) uses the free program ffmpeg:
+https://ffmpeg.org/download.html
+Everything else works without it.
+
+Press F1 inside the app for all keyboard shortcuts.
