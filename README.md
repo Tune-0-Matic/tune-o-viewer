@@ -14,11 +14,13 @@ Point it at your folders and get **every file, in one flat list**, however deepl
   - play MP3, OGG and WAV (Space)
   - see pictures and album art
   - read text and code files
+  - play videos (MP4, MKV, WebM, MOV, AVI and more, via the free ffmpeg), with pause and seek
   - file info for everything else
 - **Export**: M3U playlists (open them in any music player) or CSV (opens in Excel).
 - **Duplicate finder**: finds identical files by content, not just name. *Select Extra Copies* picks all but one of each set.
 - **Convert**: pictures to PNG, JPG or WEBP (built in), and audio to MP3, WAV, OGG, FLAC or Opus (needs the free ffmpeg). Files are saved next to the originals and never overwrite anything.
 - **Tidy up**:
+  - **Copy To... / Move To...** toolbar buttons for the selected files
   - rename files one after another (F2)
   - copy or move the selected files into one folder, never overwriting
   - send files to the Recycle Bin

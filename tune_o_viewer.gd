@@ -4,16 +4,20 @@ extends Control
 
 const Tags = preload("res://tags.gd")
 const FileView = preload("res://file_view.gd")
+const VideoPlayer = preload("res://video_player.gd")
 
 # Preset menu contents. Any other extension can be typed in.
 const PRESETS := {
 	"Audio": ["mp3", "flac", "wav", "ogg", "opus", "dsp"],
+	"Video": ["mp4", "mkv", "webm", "mov", "avi"],
 	"Code": ["gd", "py", "cpp", "h", "json"],
 	"Images": ["png", "jpg", "webp", "svg"],
 	"Documents": ["txt", "md", "pdf"],
 }
 const IMAGE_EXT := ["png", "jpg", "jpeg", "webp", "svg", "bmp", "tga"]
 const PLAYABLE := ["mp3", "ogg", "wav"]  # what Godot can decode; FLAC/Opus/DSP get info only
+const VIDEO_EXT := ["mp4", "m4v", "mkv", "webm", "mov", "avi", "wmv", "flv", "mpg", "mpeg", "ogv", "3gp", "ts"]
+const VIDEO_MAX := Vector2i(640, 360)  # preview frame size cap: plenty for the pane, cheap to decode
 const DEFAULT_SKIPS := [".git", "node_modules", "$RECYCLE.BIN", "System Volume Information"]
 const FOLDER_ART := ["cover.jpg", "folder.jpg", "front.jpg", "cover.png", "folder.png", "AlbumArtSmall.jpg"]
 const BATCH := 1000  # files per hand-off from worker threads
@@ -187,6 +191,8 @@ const FFMPEG_ARGS := {"mp3": ["-codec:a", "libmp3lame", "-q:a", "2"], "wav": ["-
 	"ogg": ["-vn", "-codec:a", "libvorbis", "-q:a", "5"], "flac": ["-vn", "-codec:a", "flac"],
 	"opus": ["-vn", "-codec:a", "libopus", "-b:a", "128k"]}
 var _welcome := AcceptDialog.new()
+var _video := VideoPlayer.new()
+var _video_size := Vector2i.ZERO  # frame size for the previewed video; zero = not a playable video
 var _ffmpeg := ""  # found on first use; "-" = looked, not installed
 const FONT_EXT := ["ttf", "otf", "ttc", "woff", "woff2", "fnt", "fon"]
 var _sfx := AudioStreamPlayer.new()  # UI blips; the preview has its own player
@@ -254,7 +260,16 @@ func _ready() -> void:
 	%Seek.drag_ended.connect(func(_c: bool) -> void:
 		_seeking = false
 		if player.stream:
-			player.seek(%Seek.value))
+			player.seek(%Seek.value)
+		elif _video_size != Vector2i.ZERO:
+			_play_video(%Seek.value))
+	_video.target = %PreviewImage
+	_video.finished.connect(func() -> void:
+		%PlayButton.text = "Play"
+		%Seek.value = 0)
+	add_child(_video)
+	%CopyToButton.pressed.connect(_collect.bind(false))
+	%MoveToButton.pressed.connect(_collect.bind(true))
 	confirm.confirmed.connect(func() -> void: _confirm_action.call())
 	%CloseButton.pressed.connect(get_tree().quit)
 	%TitleBar.gui_input.connect(_on_title_input)
@@ -290,7 +305,9 @@ func _ready() -> void:
 func _process(_d: float) -> void:
 	if player.playing and not _seeking:
 		%Seek.value = player.get_playback_position()
-	if player.stream:
+	if _video.playing and not _seeking:
+		%Seek.value = _video.time()
+	if player.stream or _video_size != Vector2i.ZERO:
 		%TimeLabel.text = "%s / %s" % [_dur(%Seek.value), _dur(%Seek.max_value)]
 	for id in _thumb_tasks.duplicate():  # every pool task must be waited on exactly once
 		if WorkerThreadPool.is_task_completed(id):
@@ -657,7 +674,7 @@ func _popup_menu(rec: int) -> void:
 		var ok := has_sel  # most items act on the selection
 		match it[1] if it[1] is String else "":
 			"_open_rec", "_reveal": ok = rec >= 0
-			"_play_rec": ok = rec >= 0 and _path[rec].get_extension().to_lower() in PLAYABLE
+			"_play_rec": ok = rec >= 0 and _path[rec].get_extension().to_lower() in PLAYABLE + VIDEO_EXT
 			"_select_all": ok = not fv.rows.is_empty()
 		menu.set_item_disabled(menu.get_item_index(id), not ok)
 	menu.popup(Rect2i(Vector2i(get_global_mouse_position()), Vector2i.ZERO))
@@ -742,6 +759,7 @@ func _set_preview(on = null) -> void:
 		_preview(fv.cursor_record())
 	else:
 		player.stop()
+		_video.stop()
 	_sync_menus()
 
 
@@ -1351,6 +1369,9 @@ func _cell(rec: int, key: String) -> String:
 
 
 func _update_status(tail := "") -> void:
+	var none := fv.sel.count(1) == 0
+	%CopyToButton.disabled = none  # the toolbar's Copy To / Move To only work on a selection
+	%MoveToButton.disabled = none
 	var parts := ["%s files" % _num(_path.size())]
 	if _shown_n != _path.size():
 		parts.append("%s shown" % _num(_shown_n))
@@ -1407,7 +1428,7 @@ func _thumb(rec: int) -> Texture2D:
 	if _thumbs.has(p):
 		return _thumbs[p]
 	var ext := p.get_extension().to_lower()
-	if ext in IMAGE_EXT or ext in Tags.AUDIO:
+	if ext in IMAGE_EXT or ext in Tags.AUDIO or ext in VIDEO_EXT:
 		if _thumbs.size() > 3000:  # keeps memory bounded on huge libraries
 			_thumbs.clear()
 		_thumbs[p] = null
@@ -1443,6 +1464,8 @@ func _cover_image(p: String) -> Image:
 	if ext in IMAGE_EXT:
 		var img := Image.new()
 		return img if img.load(p) == OK else null
+	if ext in VIDEO_EXT:
+		return _video_frame(p)
 	if ext in Tags.AUDIO:
 		var img := _image_from_bytes(Tags.read(p, true).get("art", PackedByteArray()))
 		if img:
@@ -1454,6 +1477,41 @@ func _cover_image(p: String) -> Image:
 				if fimg.load(f) == OK:
 					return fimg
 	return null
+
+
+## One frame from a video (1 s in, or the first frame of very short clips), via ffmpeg; null without it.
+func _video_frame(p: String) -> Image:
+	var ff := _find_ffmpeg()
+	if ff == "":
+		return null
+	var tmp := ProjectSettings.globalize_path(THUMBS.path_join("frame_%s.png" % (p + str(Time.get_ticks_usec())).md5_text()))
+	for at in ["1", "0"]:
+		OS.execute(ff, ["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-ss", at, "-i", p,
+			"-frames:v", "1", "-vf", "scale='min(640,iw)':-2", tmp])
+		if FileAccess.file_exists(tmp):
+			var img := Image.load_from_file(tmp)
+			DirAccess.remove_absolute(tmp)
+			return img
+	return null
+
+
+## Length, picture size and codec of a video, read from ffmpeg's description of the file.
+func _video_info(p: String) -> Dictionary:
+	var ff := _find_ffmpeg()
+	var d := {}
+	if ff == "":
+		return d
+	var out := []
+	OS.execute(ff, ["-hide_banner", "-nostdin", "-i", p], out, true)  # no output file: ffmpeg just describes it
+	var text: String = out[0] if out.size() else ""
+	var m := RegEx.create_from_string("Duration: (\\d+):(\\d+):([\\d.]+)").search(text)
+	if m:
+		d.length = m.get_string(1).to_int() * 3600 + m.get_string(2).to_int() * 60 + m.get_string(3).to_float()
+	m = RegEx.create_from_string("Video: (\\w+).*?, (\\d{2,5})x(\\d{2,5})").search(text)
+	if m:
+		d.codec = m.get_string(1)
+		d.size = Vector2i(m.get_string(2).to_int(), m.get_string(3).to_int())
+	return d
 
 
 static func _image_from_bytes(b: PackedByteArray) -> Image:
@@ -1480,6 +1538,8 @@ func _preview(rec: int) -> void:
 	_preview_rec = rec
 	player.stop()
 	player.stream = null
+	_video.stop()
+	_video_size = Vector2i.ZERO
 	%PlayButton.text = "Play"
 	for n in ["%PreviewImage", "%AudioRow", "%PreviewText"]:
 		get_node(n).visible = false
@@ -1510,7 +1570,21 @@ func _preview(rec: int) -> void:
 			info.append("%s: %s" % [k.capitalize(), v])
 	if _length[rec] > 0:
 		info.append("Length: %s   %d kbps" % [_dur(_length[rec]), _kbps[rec]])
-	if ext in PLAYABLE:
+	if ext in VIDEO_EXT:
+		var v := _video_info(p)
+		if v.has("size"):
+			info.append("Video: %d x %d  %s" % [v.size.x, v.size.y, str(v.get("codec", "")).to_upper()])
+			var k := minf(1.0, minf(VIDEO_MAX.x / float(v.size.x), VIDEO_MAX.y / float(v.size.y)))
+			_video_size = Vector2i(maxi(2, int(v.size.x * k) / 2 * 2), maxi(2, int(v.size.y * k) / 2 * 2))
+			%AudioRow.visible = true
+			%Seek.max_value = maxf(v.get("length", 0.0), 0.1)
+			%Seek.value = 0
+			%TimeLabel.text = "0:00 / " + _dur(v.get("length", 0.0))
+		if v.has("length"):
+			info.append("Length: " + _dur(v.length))
+		if _find_ffmpeg() == "":
+			info.append("Playing videos here needs the free ffmpeg (ffmpeg.org). Enter opens it in your video player.")
+	elif ext in PLAYABLE:
 		%AudioRow.visible = true
 		%Seek.max_value = maxf(_length[rec], 0.1)
 		%Seek.value = 0
@@ -1538,6 +1612,13 @@ static func _peek_text(p: String) -> String:
 
 func _toggle_play() -> void:
 	var rec := _preview_rec
+	if %Preview.visible and _video_size != Vector2i.ZERO:
+		if not _video.playing:
+			_play_video(%Seek.value if %Seek.value < %Seek.max_value - 0.5 else 0.0)
+		else:
+			_video.set_paused(not _video.paused)
+		%PlayButton.text = "Pause" if _video.playing and not _video.paused else "Play"
+		return
 	if not %Preview.visible or rec < 0 or _path[rec].get_extension().to_lower() not in PLAYABLE:
 		return
 	if player.stream == null:
@@ -1558,6 +1639,13 @@ func _toggle_play() -> void:
 	else:
 		player.stream_paused = true
 	%PlayButton.text = "Pause" if player.playing and not player.stream_paused else "Play"
+
+
+func _play_video(from: float) -> void:
+	if not _video.play(_find_ffmpeg(), _path[_preview_rec], from, _video_size):
+		status.text = "Couldn't start the video."
+		return
+	%PlayButton.text = "Pause"
 
 
 # --- export ------------------------------------------------------------------
@@ -2070,6 +2158,7 @@ func _load_index() -> bool:
 
 
 func _exit_tree() -> void:
+	_video.stop()
 	_save_prefs()
 	_abort = true
 	_job_abort = true

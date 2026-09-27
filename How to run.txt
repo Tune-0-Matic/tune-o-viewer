@@ -18,7 +18,7 @@ MACOS (Intel and Apple Silicon)
   The first time: right-click the app, choose Open, then Open again
   (the app isn't signed by Apple, so a plain double-click is blocked once).
 
-Audio conversion (File > Convert Selected To) uses the free program ffmpeg:
+Video playback and audio conversion use the free program ffmpeg:
 https://ffmpeg.org/download.html
 Everything else works without it.
 
