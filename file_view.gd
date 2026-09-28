@@ -67,15 +67,17 @@ func _notification(what: int) -> void:
 # --- public ------------------------------------------------------------------
 
 func set_data(new_rows: PackedInt32Array, new_groups: Array, record_count: int, keep := false) -> void:
+	var cur_rec := cursor_record()
 	rows = new_rows
 	groups = new_groups
 	if not keep or sel.size() != record_count:
 		sel.resize(record_count)
 		sel.fill(0)
-		cursor = -1
-		_anchor = -1
+		cur_rec = -1
 		_vs.value = 0
-	cursor = mini(cursor, rows.size() - 1)
+	# The cursor follows its file (a re-sort moves it), not the row number it happened to be on.
+	cursor = rows.find(cur_rec) if cur_rec >= 0 else -1
+	_anchor = cursor
 	_relayout()
 
 
@@ -492,7 +494,7 @@ func _mouse_motion(e: InputEventMouseMotion) -> void:
 	if p.y < inner.position.y + _hh() or p.y > inner.end.y:  # past an edge: scroll that way
 		_vs.value += signf(p.y - inner.position.y - _hh()) * _rh()
 	var i := _row_at(p.clamp(inner.position + Vector2(1, _hh() + 1), inner.end - Vector2(2, 2)))
-	if i >= 0 and i != cursor:
+	if i >= 0 and i != cursor and rows[i] >= 0:  # group headings aren't files
 		_click(i, false, true)
 
 

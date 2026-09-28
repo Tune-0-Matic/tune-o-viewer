@@ -165,15 +165,14 @@ var _thumbs := {}  # path -> Texture2D, or null while pending / when there is no
 var _thumb_tasks: Array[int] = []
 var _preview_rec := -1
 var _seeking := false
-var _menu_rec := -1
 var _save_kind := ""
 var _dialog_purpose := "add"  # FolderDialog: "add" a scan folder, or "copy"/"move" the selection
-var _pending_recs := PackedInt32Array()
+var _pending_paths := PackedStringArray()  # Copy To / Move To: the files, by path (records can be renumbered meanwhile)
 var _confirm_action: Callable
 var _rename := ConfirmationDialog.new()
 var _rename_edit := LineEdit.new()
 var _rename_note := Label.new()
-var _rename_queue := PackedInt32Array()  # records still to rename, in list order
+var _rename_queue := PackedStringArray()  # paths still to rename, in list order
 var _rename_total := 0
 var _renamed := 0
 var _menus: Array = []  # [PopupMenu, spec] for check-mark syncing
@@ -204,6 +203,10 @@ const JINGLE := [[659.25, 0.12, true], [783.99, 0.12, true], [1174.66, 0.14, tru
 var _rescan := Timer.new()  # short delay so several quick changes cause one rescan
 var _rescan_pending := false  # a change came in mid-scan: scan again when it ends
 var _shown_bytes := 0
+var _menu_path := ""  # file the right-click menu was opened on
+var _preview_timer := Timer.new()  # lets arrow-key runs settle before loading a preview
+var _preview_next := -1
+const MAX_DEPTH := 64  # folder nesting limit: stops shortcut loops from scanning forever
 
 
 func _ready() -> void:
@@ -217,7 +220,13 @@ func _ready() -> void:
 	fv.tip = func(rec: int) -> String: return _path[rec]
 	fv.activated.connect(func(rec: int) -> void: OS.shell_open(_path[rec]))
 	fv.context_requested.connect(_popup_menu)
-	fv.cursor_changed.connect(_preview)
+	fv.cursor_changed.connect(func(rec: int) -> void:
+		_preview_next = rec
+		_preview_timer.start())
+	_preview_timer.one_shot = true
+	_preview_timer.wait_time = 0.08
+	_preview_timer.timeout.connect(func() -> void: _preview(_preview_next))
+	add_child(_preview_timer)
 	fv.selection_changed.connect(_update_status)
 	fv.sort_requested.connect(func(key: String) -> void: _set_sort(key, not _desc if key == _sort else false))
 	fv.group_toggled.connect(_toggle_group)
@@ -277,7 +286,7 @@ func _ready() -> void:
 	%Grip.gui_input.connect(func(e: InputEvent) -> void:
 		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT and e.pressed:
 			DisplayServer.window_start_resize(DisplayServer.WINDOW_EDGE_BOTTOM_RIGHT))
-	menu.popup_hide.connect(func() -> void: set.call_deferred("_menu_rec", -1))
+	menu.popup_hide.connect(func() -> void: set.call_deferred("_menu_path", ""))
 	_build_help()
 	_build_about()
 	_build_welcome()
@@ -391,6 +400,8 @@ func _input(e: InputEvent) -> void:
 func _shortcut_input(e: InputEvent) -> void:
 	if not (e is InputEventKey and e.pressed and not e.echo):
 		return
+	if [_rename, confirm, dialog, save_dialog, _font_dialog].any(func(d: Window) -> bool: return d.visible):
+		return  # a dialog has the keyboard; F5 or Delete mustn't act on the list behind it
 	var s = SHORTCUTS.get((e as InputEventKey).as_text_keycode())
 	if s and s[1] != "":
 		callv(s[1], s.slice(2))
@@ -644,7 +655,7 @@ func _copy(recs: PackedInt32Array, paths: bool) -> void:
 
 
 func _menu_or_cursor() -> int:
-	return _menu_rec if _menu_rec >= 0 and _menu_rec < _path.size() else fv.cursor_record()
+	return _path.find(_menu_path) if _menu_path != "" else fv.cursor_record()
 
 
 func _open_rec() -> void:
@@ -664,7 +675,7 @@ func _play_rec() -> void:
 
 
 func _popup_menu(rec: int) -> void:
-	_menu_rec = rec
+	_menu_path = _path[rec] if rec >= 0 else ""
 	var has_sel := not _targets().is_empty()
 	var spec: Array = _menus.filter(func(m: Array) -> bool: return m[0] == menu)[0][1]
 	for id in spec.size():
@@ -760,6 +771,7 @@ func _set_preview(on = null) -> void:
 	else:
 		player.stop()
 		_video.stop()
+		_preview_rec = -1
 	_sync_menus()
 
 
@@ -993,7 +1005,7 @@ func _add_typed_folder() -> void:
 func _filters_changed() -> void:
 	if _roots.is_empty():
 		_rescan.stop()
-		_escape_scan()
+		_cancel_scan()
 		_set_records({})
 		_rebuild(false)
 		return
@@ -1007,9 +1019,22 @@ func _auto_scan() -> void:
 		_start_scan(not _path.is_empty())  # keep showing the current list if there is one
 
 
-func _escape_scan() -> void:
+## Stops a running scan right now and drops anything it still had queued for the list.
+func _cancel_scan() -> void:
+	_rescan_pending = false
+	if _phase == "":
+		return
+	_join_thread()
+	_gen += 1  # results already on their way are ignored
+	_phase = ""
+	scan_button.text = "Scan"
+
+
+## A file action changed the files while a scan was running: its list may be stale, so scan again after.
+func _files_changed() -> void:
+	_index_dirty = true
 	if _phase != "":
-		_abort = true
+		_rescan_pending = true
 
 
 func _refresh_folders() -> void:
@@ -1020,21 +1045,24 @@ func _refresh_folders() -> void:
 
 ## Dropping folders adds them; dropping a file adds the folder it lives in.
 func _on_dropped(paths: PackedStringArray) -> void:
-	var added := 0
+	var before := _roots.size()
+	var fonts := 0
 	for p in paths:
 		if p.get_extension().to_lower() in FONT_EXT:  # a dropped font file becomes the UI font
 			_use_font(p)
+			fonts += 1
 			continue
-		if _add_folder(p if DirAccess.dir_exists_absolute(p) else p.get_base_dir()):
-			added += 1
-	status.text = "Added %d folder%s." % [added, "" if added == 1 else "s"]
+		_add_folder(p if DirAccess.dir_exists_absolute(p) else p.get_base_dir())
+	var added := _roots.size() - before
+	if fonts < paths.size():
+		status.text = "Added %d folder%s." % [added, "" if added == 1 else "s"] if added else "Those folders are already listed."
 
 
 func _on_dir_chosen(dir: String) -> void:
 	if _dialog_purpose == "add":
 		_add_folder(dir)
 	else:
-		_start_collect(_pending_recs, dir, _dialog_purpose == "move")
+		_start_collect(_pending_paths, dir, _dialog_purpose == "move")
 
 
 ## Drops folders already covered by another root, so nothing is listed twice.
@@ -1096,19 +1124,27 @@ func _join_thread() -> void:
 ## Worker thread: walk the folders, then read size, date and tags of each file.
 func _scan(gen: int, roots: PackedStringArray, exts: Dictionary, skip: PackedStringArray, quiet: bool, prev: Dictionary) -> void:
 	var stack := roots
+	var depth := PackedInt32Array()
+	depth.resize(roots.size())
+	depth.fill(0)
 	var found := PackedStringArray()
 	var batch := PackedStringArray()
 	var dirs := 0
 	while not stack.is_empty() and not _abort:
 		var dir := stack[-1]
+		var level := depth[-1]
 		stack.resize(stack.size() - 1)
+		depth.resize(depth.size() - 1)
 		dirs += 1
 		for f in DirAccess.get_files_at(dir):
 			if exts.is_empty() or exts.has(f.get_extension().to_lower()):
 				batch.append(dir.path_join(f))
+		if level >= MAX_DEPTH:
+			continue
 		for d in DirAccess.get_directories_at(dir):
 			if not Array(skip).any(func(s: String) -> bool: return d.matchn(s)):
 				stack.append(dir.path_join(d))
+				depth.append(level + 1)
 		if batch.size() >= BATCH and not quiet:
 			_found.call_deferred(gen, batch, dirs)
 			found.append_array(batch)
@@ -1197,6 +1233,8 @@ func _details(gen: int, start: int, cols: Dictionary) -> void:
 		return
 	for i in cols._path.size():
 		var r: int = start + i
+		if r >= _path.size() or _path[r] != cols._path[i]:
+			continue  # that record was renamed, moved or removed meanwhile
 		_size[r] = cols._size[i]; _mtime[r] = cols._mtime[i]; _title[r] = cols._title[i]
 		_artist[r] = cols._artist[i]; _album[r] = cols._album[i]; _year[r] = cols._year[i]
 		_track[r] = cols._track[i]; _length[r] = cols._length[i]; _kbps[r] = cols._kbps[i]
@@ -1208,9 +1246,24 @@ func _details(gen: int, start: int, cols: Dictionary) -> void:
 func _replace_all(gen: int, cols: Dictionary, dirs: int) -> void:
 	if gen != _gen:
 		return
+	var picked := PackedStringArray()
+	for r in fv.selected():
+		picked.append(_path[r])
+	var cursor_path := _path[fv.cursor_record()] if fv.cursor_record() >= 0 else ""
+	var preview_path := _path[_preview_rec] if _preview_rec >= 0 and _preview_rec < _path.size() else ""
 	_set_records(cols)
 	_dirs = dirs
-	_rebuild(true)
+	_rebuild(false)
+	var at := {}  # path -> new record number
+	for i in _path.size():
+		at[_path[i]] = i
+	var sel := PackedInt32Array()
+	for p in picked:
+		if at.has(p):
+			sel.append(at[p])
+	fv.set_selected(sel)
+	fv.cursor = fv.rows.find(at.get(cursor_path, -2))
+	_preview_rec = at.get(preview_path, -1)
 
 
 func _scan_done(gen: int) -> void:
@@ -1432,17 +1485,18 @@ func _thumb(rec: int) -> Texture2D:
 		if _thumbs.size() > 3000:  # keeps memory bounded on huge libraries
 			_thumbs.clear()
 		_thumbs[p] = null
-		_thumb_tasks.append(WorkerThreadPool.add_task(_make_thumb.bind(p, _mtime[rec])))
+		var ff := _find_ffmpeg() if ext in VIDEO_EXT else ""  # looked up here: workers never touch _ffmpeg
+		_thumb_tasks.append(WorkerThreadPool.add_task(_make_thumb.bind(p, _mtime[rec], ff)))
 	return null
 
 
-func _make_thumb(p: String, mtime: int) -> void:
+func _make_thumb(p: String, mtime: int, ff: String) -> void:
 	var cache := THUMBS.path_join((p + str(mtime)).md5_text() + ".png")
 	var img: Image
 	if FileAccess.file_exists(cache):
 		img = Image.load_from_file(cache)
 	else:
-		img = _cover_image(p)
+		img = _cover_image(p, ff)
 		if img:
 			var s := img.get_size()
 			var k := minf(FileView.THUMB / float(s.x), FileView.THUMB / float(s.y))
@@ -1459,13 +1513,13 @@ func _thumb_ready(p: String, img: Image) -> void:
 
 
 ## The picture for a file: the image itself, a song's embedded cover, or its folder's cover.jpg.
-func _cover_image(p: String) -> Image:
+func _cover_image(p: String, ff := "-") -> Image:
 	var ext := p.get_extension().to_lower()
 	if ext in IMAGE_EXT:
 		var img := Image.new()
 		return img if img.load(p) == OK else null
 	if ext in VIDEO_EXT:
-		return _video_frame(p)
+		return _video_frame(p, _find_ffmpeg() if ff == "-" else ff)
 	if ext in Tags.AUDIO:
 		var img := _image_from_bytes(Tags.read(p, true).get("art", PackedByteArray()))
 		if img:
@@ -1480,8 +1534,7 @@ func _cover_image(p: String) -> Image:
 
 
 ## One frame from a video (1 s in, or the first frame of very short clips), via ffmpeg; null without it.
-func _video_frame(p: String) -> Image:
-	var ff := _find_ffmpeg()
+func _video_frame(p: String, ff: String) -> Image:
 	if ff == "":
 		return null
 	var tmp := ProjectSettings.globalize_path(THUMBS.path_join("frame_%s.png" % (p + str(Time.get_ticks_usec())).md5_text()))
@@ -1531,6 +1584,7 @@ static func _image_from_bytes(b: PackedByteArray) -> Image:
 # --- preview pane ------------------------------------------------------------
 
 func _preview(rec: int) -> void:
+	_preview_timer.stop()  # a direct request wins over a pending arrow-key one
 	if not %Preview.visible:
 		return
 	if rec == _preview_rec and rec >= 0:
@@ -1818,33 +1872,37 @@ func _collect(move: bool) -> void:
 	if _job.is_started():
 		status.text = "Busy - try again when the current task finishes."
 		return
-	_pending_recs = recs
+	_pending_paths = PackedStringArray()
+	for r in recs:
+		_pending_paths.append(_path[r])
 	_dialog_purpose = "move" if move else "copy"
 	dialog.title = "%s %d files to..." % ["Move" if move else "Copy", recs.size()]
 	dialog.popup_centered_ratio(0.7)
 
 
-func _start_collect(recs: PackedInt32Array, dest: String, move: bool) -> void:
-	var paths := PackedStringArray()
-	for r in recs:
-		paths.append(_path[r])
+func _start_collect(paths: PackedStringArray, dest: String, move: bool) -> void:
+	if _job.is_started():
+		status.text = "Busy - try again when the current task finishes."
+		return
 	var go := func() -> void:
 		_job_abort = false
-		_job.start(_collect_job.bind(recs, paths, dest, move))
+		_job.start(_collect_job.bind(paths, dest, move))
 	if move:
-		_ask("Move %d files into\n%s ?" % [recs.size(), dest], go)
+		_ask("Move %d files into\n%s ?" % [paths.size(), dest], go)
 	else:
 		go.call()
 
 
 ## Worker: copy or move files into one folder, never overwriting ("song (2).mp3").
-func _collect_job(recs: PackedInt32Array, paths: PackedStringArray, dest: String, move: bool) -> void:
-	var moved := {}  # rec -> new path
+func _collect_job(paths: PackedStringArray, dest: String, move: bool) -> void:
+	var moved := {}  # old path -> new path
 	var failed := 0
 	for n in paths.size():
 		if _job_abort:
 			break
 		var src := paths[n]
+		if move and src.get_base_dir().to_lower() == dest.to_lower().trim_suffix("/"):
+			continue  # already in that folder
 		var target := dest.path_join(src.get_file())
 		var k := 2
 		while FileAccess.file_exists(target):
@@ -1854,7 +1912,7 @@ func _collect_job(recs: PackedInt32Array, paths: PackedStringArray, dest: String
 		if move and err != OK and DirAccess.copy_absolute(src, target) == OK:  # different drive
 			err = DirAccess.remove_absolute(src)
 		if err == OK:
-			moved[recs[n]] = target
+			moved[src] = target
 		else:
 			failed += 1
 		if n % 20 == 0:
@@ -1865,10 +1923,14 @@ func _collect_job(recs: PackedInt32Array, paths: PackedStringArray, dest: String
 func _collect_done(moved: Dictionary, failed: int, dest: String, move: bool) -> void:
 	_job.wait_to_finish()
 	if move:
-		for r in moved:
-			_path[r] = moved[r]
-		_index_dirty = true
+		for old in moved:
+			var r := _path.find(old)
+			if r >= 0:
+				_path[r] = moved[old]
+		_files_changed()
 		_rebuild(true)
+	elif _roots.any(func(root: String) -> bool: return (dest + "/").to_lower().begins_with(root.to_lower().trim_suffix("/") + "/")):
+		_rescan.start()  # copies landed inside a scanned folder: list them
 	status.text = "%s %d files to %s%s" % ["Moved" if move else "Copied", moved.size(), dest,
 		"  (%d failed)" % failed if failed else ""]
 
@@ -1899,14 +1961,16 @@ func _rename_start() -> void:
 	if recs.is_empty():
 		status.text = "Select a file to rename."
 		return
-	_rename_queue = recs
+	_rename_queue = PackedStringArray()
+	for r in recs:
+		_rename_queue.append(_path[r])
 	_rename_total = recs.size()
 	_renamed = 0
 	_rename_show()
 
 
 func _rename_show(error := "") -> void:
-	var name := _path[_rename_queue[0]].get_file()
+	var name := _rename_queue[0].get_file()
 	var n := _rename_total - _rename_queue.size() + 1
 	_rename.title = "Rename" if _rename_total == 1 else "Rename file %d of %d" % [n, _rename_total]
 	_rename_note.text = (error + "\n" if error != "" else "") + "New name for  " + name
@@ -1918,8 +1982,8 @@ func _rename_show(error := "") -> void:
 
 
 func _rename_apply() -> void:
-	var r := _rename_queue[0]
-	var old := _path[r]
+	var old := _rename_queue[0]
+	var r := _path.find(old)
 	var new := _rename_edit.text.strip_edges()
 	if new == old.get_file():
 		_rename_advance()
@@ -1935,10 +1999,11 @@ func _rename_apply() -> void:
 	if error != "":
 		_rename_show.call_deferred(error)  # the dialog closes itself on OK; bring it back
 		return
-	_path[r] = target
+	if r >= 0:
+		_path[r] = target
 	_renamed += 1
-	_index_dirty = true
-	if _preview_rec == r:
+	_files_changed()
+	if r >= 0 and _preview_rec == r:
 		_preview_rec = -1
 		_preview(r)
 	_rename_advance()
@@ -2036,21 +2101,27 @@ func _convert_done(done: int, failed: PackedStringArray, fmt: String) -> void:
 	status.text = "Converted %d file%s to %s.%s" % [done, "" if done == 1 else "s", fmt.to_upper(),
 		("  Couldn't convert: " + ", ".join(failed)) if not failed.is_empty() else ""]
 	if done > 0 and not _roots.is_empty():
+		_files_changed()
 		_rescan.start()  # pick the new files up
 
 
 func _recycle() -> void:
-	var recs := _targets()
-	if recs.is_empty():
+	var paths := PackedStringArray()
+	for r in _targets():
+		paths.append(_path[r])
+	if paths.is_empty():
 		return
-	_ask("Send %d file%s to the Recycle Bin?" % [recs.size(), "" if recs.size() == 1 else "s"], func() -> void:
+	_ask("Send %d file%s to the Recycle Bin?" % [paths.size(), "" if paths.size() == 1 else "s"], func() -> void:
 		var gone := PackedInt32Array()
-		for r in recs:
-			if OS.move_to_trash(_path[r]) == OK:
-				gone.append(r)
+		for p in paths:  # by path: the list may have been refreshed while the question was up
+			if OS.move_to_trash(p) == OK:
+				var r := _path.find(p)
+				if r >= 0:
+					gone.append(r)
 		_drop_records(gone)
+		_files_changed()
 		status.text = "Sent %d file%s to the Recycle Bin%s" % [gone.size(), "" if gone.size() == 1 else "s",
-			"  (%d failed)" % (recs.size() - gone.size()) if gone.size() < recs.size() else ""])
+			"  (%d failed)" % (paths.size() - gone.size()) if gone.size() < paths.size() else ""])
 
 
 func _ask(text: String, action: Callable) -> void:
@@ -2159,6 +2230,9 @@ func _load_index() -> bool:
 
 func _exit_tree() -> void:
 	_video.stop()
+	for sp: AudioStreamPlayer in [_sfx, player]:  # a sound still playing at quit would be reported as leaked
+		sp.stop()
+		sp.stream = null
 	_save_prefs()
 	_abort = true
 	_job_abort = true

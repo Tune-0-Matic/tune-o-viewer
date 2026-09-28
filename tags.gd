@@ -37,7 +37,10 @@ static func read(path: String, want_art := false) -> Dictionary:
 
 # --- helpers -----------------------------------------------------------------
 
+# Every reader below is bounds-safe: damaged or truncated files read as 0, never as an error.
 static func _be(b: PackedByteArray, i: int, n: int) -> int:
+	if i < 0 or i + n > b.size():
+		return 0
 	var v := 0
 	for k in n:
 		v = (v << 8) | b[i + k]
@@ -45,7 +48,17 @@ static func _be(b: PackedByteArray, i: int, n: int) -> int:
 
 
 static func _synchsafe(b: PackedByteArray, i: int) -> int:
+	if i < 0 or i + 4 > b.size():
+		return 0
 	return (b[i] << 21) | (b[i + 1] << 14) | (b[i + 2] << 7) | b[i + 3]
+
+
+static func _u32(b: PackedByteArray, i: int) -> int:
+	return b.decode_u32(i) if i >= 0 and i + 4 <= b.size() else 0
+
+
+static func _u16(b: PackedByteArray, i: int) -> int:
+	return b.decode_u16(i) if i >= 0 and i + 2 <= b.size() else 0
 
 
 ## Bytes up to (not including) the first NUL; step 2 keeps UTF-16 code units aligned.
@@ -109,10 +122,12 @@ static func _id3v2(f: FileAccess, out: Dictionary, want_art: bool) -> int:
 		var e := f.get_buffer(4)
 		f.seek(f.get_position() - 4 + (_synchsafe(e, 0) if ver == 4 else _be(e, 0, 4) + 4))
 	var idlen := 3 if ver == 2 else 4
+	end = mini(end, f.get_length())  # a damaged header can claim more than the file holds
+	var fhlen := 6 if ver == 2 else 10
 	while f.get_position() + idlen * 2 < end:
-		var fh := f.get_buffer(6 if ver == 2 else 10)
-		if fh[0] == 0:
-			break  # padding
+		var fh := f.get_buffer(fhlen)
+		if fh.size() < fhlen or fh[0] == 0:
+			break  # padding, or the file ends here
 		var id := fh.slice(0, idlen).get_string_from_ascii()
 		var size := _be(fh, 3, 3) if ver == 2 else (_synchsafe(fh, 4) if ver == 4 else _be(fh, 4, 4))
 		var body_at := f.get_position()
@@ -123,6 +138,8 @@ static func _id3v2(f: FileAccess, out: Dictionary, want_art: bool) -> int:
 			var b := f.get_buffer(size)
 			if ver == 4 and fh[9] & 0x01:  # data-length indicator
 				b = b.slice(4)
+			if b.is_empty():
+				break
 			if is_pic:
 				var enc := b[0]
 				var i := 4 if ver == 2 else _skip_term(b, 1, 0)  # v2.2: 3-char format; else MIME
@@ -139,7 +156,7 @@ static func _mp3(f: FileAccess, out: Dictionary, want_art: bool) -> void:
 	var audio_end := f.get_length()
 	f.seek(audio_end - 128)
 	var v1 := f.get_buffer(128)
-	if v1.slice(0, 3).get_string_from_ascii() == "TAG":
+	if v1.size() == 128 and v1.slice(0, 3).get_string_from_ascii() == "TAG":
 		audio_end -= 128
 		for pair in [["title", 3], ["artist", 33], ["album", 63]]:
 			if not out.has(pair[0]):
@@ -170,9 +187,11 @@ static func _mp3(f: FileAccess, out: Dictionary, want_art: bool) -> void:
 		var tag := b.slice(xing, xing + 4).get_string_from_ascii() if xing + 12 <= b.size() else ""
 		if (tag == "Xing" or tag == "Info") and _be(b, xing + 4, 4) & 1:
 			frames = _be(b, xing + 8, 4)
-		elif i + 50 <= b.size() and b.slice(i + 36, i + 40).get_string_from_ascii() == "VBRI":
+		elif i + 54 <= b.size() and b.slice(i + 36, i + 40).get_string_from_ascii() == "VBRI":
 			frames = _be(b, i + 50, 4)
 		var bytes := audio_end - (audio_start + i)
+		if bytes <= 0:
+			return
 		if frames > 0:
 			out.length = frames * spf / float(rate)
 		else:
@@ -207,6 +226,8 @@ static func _flac(f: FileAccess, out: Dictionary, want_art: bool) -> void:
 		var at := f.get_position()
 		if type == 0:
 			var b := f.get_buffer(size)
+			if b.size() < 18:
+				return
 			var rate := (b[10] << 12) | (b[11] << 4) | (b[12] >> 4)
 			var total := ((b[13] & 0x0F) << 32) | _be(b, 14, 4)
 			if rate > 0:
@@ -222,13 +243,15 @@ static func _flac(f: FileAccess, out: Dictionary, want_art: bool) -> void:
 static func _vorbis_comments(b: PackedByteArray, i: int, out: Dictionary, want_art: bool) -> void:
 	if i + 8 > b.size():
 		return
-	i += 4 + b.decode_u32(i)  # vendor string
-	var count := b.decode_u32(i)
+	i += 4 + _u32(b, i)  # vendor string
+	if i + 4 > b.size():
+		return
+	var count := _u32(b, i)
 	i += 4
 	for _k in count:
 		if i + 4 > b.size():
 			return
-		var n := b.decode_u32(i)
+		var n := _u32(b, i)
 		var kv := b.slice(i + 4, i + 4 + n).get_string_from_utf8()
 		i += 4 + n
 		var key := kv.get_slice("=", 0).to_upper()
@@ -268,12 +291,12 @@ static func _ogg(f: FileAccess, out: Dictionary, want_art: bool) -> void:
 	var rate := 0
 	var preskip := 0
 	if id.slice(0, 7) == PackedByteArray([1]) + "vorbis".to_ascii_buffer():
-		rate = id.decode_u32(12)
+		rate = _u32(id, 12)
 		if packets.size() > 1:
 			_vorbis_comments(packets[1], 7, out, want_art)
 	elif id.slice(0, 8).get_string_from_ascii() == "OpusHead":
 		rate = 48000  # Opus granule positions always count 48 kHz samples
-		preskip = id.decode_u16(10)
+		preskip = _u16(id, 10)
 		if packets.size() > 1:
 			_vorbis_comments(packets[1], 8, out, want_art)
 	if rate == 0:
@@ -301,11 +324,11 @@ static func _wav(f: FileAccess, out: Dictionary, want_art: bool) -> void:
 	while f.get_position() + 8 <= f.get_length():
 		var c := f.get_buffer(8)
 		var id := c.slice(0, 4).get_string_from_ascii()
-		var size := c.decode_u32(4)
 		var at := f.get_position()
+		var size := mini(c.decode_u32(4), f.get_length() - at)  # never trust a size past the end of the file
 		match id:
 			"fmt ":
-				byterate = f.get_buffer(12).decode_u32(8)
+				byterate = _u32(f.get_buffer(12), 8)
 			"data":
 				data = size
 			"LIST":
@@ -314,7 +337,7 @@ static func _wav(f: FileAccess, out: Dictionary, want_art: bool) -> void:
 					var i := 4
 					while i + 8 <= b.size():
 						var sid := b.slice(i, i + 4).get_string_from_ascii()
-						var slen := b.decode_u32(i + 4)
+						var slen := _u32(b, i + 4)
 						if INFO_KEYS.has(sid) and not out.has(INFO_KEYS[sid]):
 							out[INFO_KEYS[sid]] = _cut(b.slice(i + 8, i + 8 + slen)).get_string_from_utf8()
 						i += 8 + slen + (slen & 1)
